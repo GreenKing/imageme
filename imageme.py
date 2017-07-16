@@ -1,4 +1,5 @@
 #!/usr/bin/python
+#coding=utf-8
 """
 imageMe is a super simple image gallery server.
 
@@ -12,20 +13,35 @@ what's called.
 
 # Dependencies
 import base64, io, os, re, sys, threading, SimpleHTTPServer, SocketServer
+import glob
 # Attempt to import PIL - if it doesn't exist we won't be able to make use of
 # some performance enhancing goodness, but imageMe will still work fine
 PIL_ENABLED = False
-try:
-    print('Attempting to import from PIL...')
-    from PIL import Image
-    PIL_ENABLED = True
-    print('Success! Enjoy your supercharged imageMe.')
-except ImportError:
-    print(
-        'WARNING: \'PIL\' module not found, so you won\'t get all the ' +\
-        'performance you could out of imageMe. Install Pillow (' +\
-        'https://github.com/python-pillow/Pillow) to enable support.'
-    )
+OPENCV_ENABLED = False
+
+#try:
+    #print('Attempting to import from cv2(OpenCV)...')
+    #import cv2
+    #import numpy as np
+    #OPENCV_ENABLED = True
+    #print('Success! Enjoy your supercharged imageMe.')
+#except ImportError:
+    #print(
+        #'WARNING: \'cv2(OpenCV)\' module not found.'
+    #)   
+    
+if not OPENCV_ENABLED:
+    try:
+        print('Attempting to import from PIL...')
+        from PIL import Image
+        PIL_ENABLED = True
+        print('Success! Enjoy your supercharged imageMe.')
+    except ImportError:
+        print(
+            'WARNING: \'PIL\' module not found, so you won\'t get all the ' +\
+            'performance you could out of imageMe. Install Pillow (' +\
+            'https://github.com/python-pillow/Pillow) to enable support.'
+        )
 
 # Constants / configuration
 ## Filename of the generated index files
@@ -102,7 +118,8 @@ def _create_index_file(
         '<!DOCTYPE html>',
         '<html>',
         '    <head>',
-        '        <title>imageMe</title>'
+        '        <meta charset="UTF-8">',
+        '        <title>imageMe</title>',
         '        <style>',
         '            html, body {margin: 0;padding: 0;}',
         '            .header {text-align: right;}',
@@ -129,6 +146,7 @@ def _create_index_file(
         html.append('<hr>')
     # For each subdirectory, include a link to its index file
     for directory in directories:
+        #directory = directory.decode('utf-8')
         link = directory + '/' + INDEX_FILE_NAME
         html += [
             '    <h3 class="header">',
@@ -141,6 +159,7 @@ def _create_index_file(
     html += ['<hr>', '<table>']
     # For each image file, potentially create a new <tr> and create a new <td>
     for image_file in image_files:
+        #image_file = image_file.decode('utf-8')
         if table_row_count == 1:
             html.append('<tr>')
         img_src = _get_thumbnail_src_from_file(
@@ -149,6 +168,8 @@ def _create_index_file(
         link_target = _get_image_link_target_from_file(
             location, image_file, force_no_processing
         )
+        if link_target is None:
+            continue
         html += [
             '    <td>',
             '    <a href="' + link_target + '">',
@@ -170,45 +191,41 @@ def _create_index_file(
     index_file_path = _get_index_file_path(location)
     print('Creating index file %s' % index_file_path)
     index_file = open(index_file_path, 'w')
-    index_file.write('\n'.join(html))
+    str_html = '\n'.join(html)
+    index_file.write(str_html.encode("UTF-8"))
     index_file.close()
     # Return the path for cleaning up later
     return index_file_path
 
-def _create_index_files(root_dir, force_no_processing=False):
-    """
-    Crawl the root directory downwards, generating an index HTML file in each
-    directory on the way down.
 
-    @param {String} root_dir - The top level directory to crawl down from. In
-        normal usage, this will be '.'.
-
-    @param {Boolean=False} force_no_processing - If True, do not attempt to
-        actually process thumbnails, PIL images or anything. Simply index
-        <img> tags with original file src attributes.
-
-    @return {[String]} Full file paths of all created files.
-    """
-    # Initialise list of created file paths to build up as we make them
-    created_files = []
-    # Walk the root dir downwards, creating index files as we go
-    for here, dirs, files in os.walk(root_dir):
-        print('Processing %s' % here)
-        # Sort the subdirectories by name
-        dirs = sorted(dirs)
-        # Get image files - all files in the directory matching IMAGE_FILE_REGEX
-        image_files = [f for f in files if re.match(IMAGE_FILE_REGEX, f)]
-        # Sort the image files by name
+def walk_dir(root_dir, th=0, force_no_processing=False):
+    indexed_files = []
+    dirs = []
+    files = []
+    try:
+        for eachf in os.listdir(root_dir):
+            if os.path.isfile(os.path.join(root_dir, eachf)):
+                files.append(eachf)
+            else:
+                cur_idxed_files = walk_dir(os.path.join(root_dir, eachf), th, force_no_processing)
+                if cur_idxed_files:
+                    dirs.append(eachf)
+                    indexed_files += cur_idxed_files
+    except OSError as e:
+        print("OSError:", e.message)
+    image_files = [f for f in files if re.match(IMAGE_FILE_REGEX, f)]        
+    # if less than th, abort this root_dir
+    if len(image_files) > th or dirs:
         image_files = sorted(image_files)
-        # Create this directory's index file and add its name to the created
-        # files list
-        created_files.append(
+        indexed_files.append(
             _create_index_file(
-                root_dir, here, image_files, dirs, force_no_processing
+                root_dir, root_dir, image_files, dirs, force_no_processing
             )
-        )
-    # Return the list of created files
-    return created_files
+        )     
+    return indexed_files
+
+def _create_index_files(root_dir, force_no_processing=False):
+    return walk_dir(root_dir, th=5, force_no_processing=force_no_processing)
 
 def _get_image_from_file(dir_path, image_file):
     """
@@ -223,14 +240,29 @@ def _get_image_from_file(dir_path, image_file):
         present, or because it can't process the given file type.
     """
     # Save ourselves the effort if PIL is not present, and return None now
-    if not PIL_ENABLED:
+    if not PIL_ENABLED and not OPENCV_ENABLED:
         return None
     # Put together full path
     path = os.path.join(dir_path, image_file)
     # Try to read the image
     img = None
+    
     try:
-        img = Image.open(path)
+        if OPENCV_ENABLED:            
+            img = cv2.imread(path)            
+            # bgr to rgb
+            img[:, :, (0, 1, 2)] = img[:, :, (2, 1, 0)]            
+        if PIL_ENABLED:
+            img = Image.open(path)
+    except UnicodeEncodeError as e:
+        print(e.message)
+        if OPENCV_ENABLED:
+            stream = open(path, "rb")
+            bytesdata = bytearray(stream.read())
+            numpyarray = np.asarray(bytesdata, dtype=np.uint8)
+            img = cv2.imdecode(numpyarray, cv2.IMREAD_UNCHANGED)  
+            # bgr to rgb
+            img[:, :, (0, 1, 2)] = img[:, :, (2, 1, 0)]   
     except IOError as exptn:
         print('Error loading image file %s: %s' % (path, exptn))
     # Return image or None
@@ -258,9 +290,16 @@ def _get_image_link_target_from_file(dir_path, image_file, force_no_processing=F
         return image_file
     # First try to get an image
     img = _get_image_from_file(dir_path, image_file)
+    if img is None:
+        return None
     # If format is directly displayable in-browser, just return the filename
     # Else, we need to return a full-sized chunk of displayable image data
-    if img.format.lower() in ['tif', 'tiff']:
+    if PIL_ENABLED:
+        target_format = img.format
+    elif OPENCV_ENABLED:
+        filename, file_extension = os.path.splitext(image_file)
+        target_format = file_extension.encode('ascii')[1:]    
+    if target_format.lower() in ['tif', 'tiff']:
         return _get_image_src_from_file(
             dir_path, image_file, force_no_processing
         )
@@ -338,14 +377,21 @@ def _get_src_from_image(img, fallback_image_file):
     # Target format should be the same as the original image format, unless it's
     # a TIF/TIFF, which can't be displayed by most browsers; we convert these
     # to jpeg
-    target_format = img.format
+    if PIL_ENABLED:
+        target_format = img.format
+    elif OPENCV_ENABLED:
+        filename, file_extension = os.path.splitext(fallback_image_file)
+        target_format = file_extension.encode('ascii')[1:]
     if target_format.lower() in ['tif', 'tiff']:
         target_format = 'JPEG'
     # If we have an actual Image, great - put together the base64 image string
     try:
-        bytesio = io.BytesIO()
-        img.save(bytesio, target_format)
-        byte_value = bytesio.getvalue()
+        if PIL_ENABLED:
+            bytesio = io.BytesIO()
+            img.save(bytesio, target_format)
+            byte_value = bytesio.getvalue()
+        elif OPENCV_ENABLED:
+            byte_value = img.tobytes()        
         b64 = base64.b64encode(byte_value)
         return 'data:image/%s;base64,%s' % (target_format.lower(), b64)
     except IOError as exptn:
@@ -370,10 +416,13 @@ def _get_thumbnail_image_from_file(dir_path, image_file):
     # If it's not supported, exit now
     if img is None:
         return None
-    if img.format.lower() == 'gif':
+    if PIL_ENABLED and img.format.lower() == 'gif':
         return None
+    if PIL_ENABLED:
     # Get image dimensions
-    img_width, img_height = img.size
+        img_width, img_height = img.size
+    elif OPENCV_ENABLED:
+        img_height, img_width = img.shape[:2]
     # We need to perform a resize - first, work out the scale ratio to take the
     # image width to THUMBNAIL_WIDTH (THUMBNAIL_WIDTH:img_width ratio)
     scale_ratio = THUMBNAIL_WIDTH / float(img_width)
@@ -381,7 +430,10 @@ def _get_thumbnail_image_from_file(dir_path, image_file):
     target_height = int(scale_ratio * img_height)
     # Perform the resize
     try:
-        img.thumbnail((THUMBNAIL_WIDTH, target_height), resample=RESAMPLE)
+        if PIL_ENABLED:
+            img.thumbnail((THUMBNAIL_WIDTH, target_height), resample=RESAMPLE)
+        elif OPENCV_ENABLED:
+            img = cv2.resize(img, (THUMBNAIL_WIDTH, target_height))
     except IOError as exptn:
         print('WARNING: IOError when thumbnailing %s/%s: %s' % (
             dir_path, image_file, exptn
@@ -445,6 +497,7 @@ def _run_server():
     try:
         # Run it - this call blocks until the server is killed
         server.serve_forever()
+        
     except KeyboardInterrupt:
         # This is the expected way of the server being killed, since imageMe is
         # intended for ad-hoc running from command line
@@ -452,7 +505,7 @@ def _run_server():
     except Exception as exptn:
         # Catch everything else - this will handle shutdowns via other signals
         # and faults actually starting the server in the first place
-        print(exptn)
+        print(exptn.message)
         print('Unhandled exception in server, stopping')
 
 def serve_dir(dir_path):
@@ -468,14 +521,19 @@ def serve_dir(dir_path):
     # of page generation, but potentially slow serving for large image files
     print('Performing first pass index file generation')
     created_files = _create_index_files(dir_path, True)
-    if (PIL_ENABLED):
+    if (PIL_ENABLED or OPENCV_ENABLED):
         # If PIL is enabled, we'd like to process the HTML indexes to include
         # generated thumbnails - this slows down generation so we don't do it
         # first time around, but now we're serving it's good to do in the
         # background
-        print('Performing PIL-enchanced optimised index file generation in background')
+        if OPENCV_ENABLED:
+            print('Performing OpenCV-enchanced optimised index file generation in background')
+        elif PIL_ENABLED:
+            print('Performing PIL-enchanced optimised index file generation in background')
         background_indexer = BackgroundIndexFileGenerator(dir_path)
         background_indexer.run()
+        
+    print("ALL images has been done!")
     # Run the server in the current location - this blocks until it's stopped
     _run_server()
     # Clean up the index files created earlier so we don't make a mess of
@@ -485,4 +543,4 @@ def serve_dir(dir_path):
 if __name__ == '__main__':
     # Generate indices and serve from the current directory downwards when run
     # as the entry point
-    serve_dir('.')
+    serve_dir(u'.')

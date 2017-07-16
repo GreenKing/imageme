@@ -1,5 +1,11 @@
 # [imageMe](http://www.imageme.xyz/)
 
+### Updates
+ - Remove folders does not contain images
+ - Fix SimpleHTTPServer Chinese compatibility in Windows
+
+---------------
+
 imageMe is a super simple image gallery server.
 
 Think `python -m SimpleHTTPServer` for pictures.
