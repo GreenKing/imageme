@@ -219,7 +219,7 @@ def walk_dir(root_dir, th=0, force_no_processing=False):
         image_files = sorted(image_files)
         indexed_files.append(
             _create_index_file(
-                root_dir, root_dir, image_files, dirs, force_no_processing
+                root_dir, root_dir, image_files, [u'..',] + dirs, force_no_processing
             )
         )     
     return indexed_files

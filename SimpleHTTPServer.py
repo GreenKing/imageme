@@ -19,6 +19,7 @@ import cgi
 import sys
 import shutil
 import mimetypes
+import locale
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -66,9 +67,9 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         None, in which case the caller has nothing further to do.
 
         """
-        path = self.translate_path(self.path)
+        path = self.translate_path2(self.path)
         f = None
-        if os.path.isdir(path):
+        if os.path.isdir(path.decode('utf8')):
             parts = urlparse.urlsplit(self.path)
             if not parts.path.endswith('/'):
                 # redirect browser - doing basically what apache does
@@ -91,7 +92,7 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             # Always read in binary mode. Opening files in text mode may cause
             # newline translations, making the actual size of the content
             # transmitted *less* than the content-length!
-            f = open(path.decode('utf-8'), 'rb')
+            f = open(path.decode('utf8'), 'rb')
         except IOError:
             self.send_error(404, "File not found")
             return None
@@ -116,7 +117,8 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
         """
         try:
-            list = os.listdir(path)
+            encoding = locale.getpreferredencoding()
+            list = os.listdir(path.decode('utf8').encode(encoding))
         except os.error:
             self.send_error(404, "No permission to list directory")
             return None
@@ -174,6 +176,33 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         if trailing_slash:
             path += '/'
         return path
+    
+    def translate_path2(self, path):
+        """Translate a /-separated PATH to the local filename syntax.
+    
+        Components that mean special things to the local file system
+        (e.g. drive or directory names) are ignored.  (XXX They should
+        probably be diagnosed.)
+    
+        """
+        # abandon query parameters
+        path = path.split('?',1)[0]
+        path = path.split('#',1)[0]
+        # Don't forget explicit trailing slash when normalizing. Issue17324
+        trailing_slash = path.rstrip().endswith('/')
+        path = posixpath.normpath(urllib.unquote(path))
+        words = path.split('/')
+        words = filter(None, words)
+        encoding = locale.getpreferredencoding()
+        path = os.getcwd().decode(encoding).encode('utf8')
+        for word in words:
+            if os.path.dirname(word) or word in (os.curdir, os.pardir):
+                # Ignore components that are not a simple file/directory name
+                continue
+            path = os.path.join(path, word)
+        if trailing_slash:
+            path += '/'
+        return path    
 
     def copyfile(self, source, outputfile):
         """Copy all data between two file objects.
